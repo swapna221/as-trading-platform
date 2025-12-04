@@ -1,0 +1,3 @@
+com\trading\apigateway\ApigatewayApplication.class
+com\trading\apigateway\filter\JwtAuthGatewayFilterFactory.class
+com\trading\apigateway\filter\JwtAuthGatewayFilterFactory$Config.class

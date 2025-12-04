@@ -1,0 +1,17 @@
+{
+  "groups": [
+    {
+      "name": "auth-service",
+      "type": "com.trading.manualorderservice.config.AuthServiceConfig",
+      "sourceType": "com.trading.manualorderservice.config.AuthServiceConfig"
+    }
+  ],
+  "properties": [
+    {
+      "name": "auth-service.url",
+      "type": "java.lang.String",
+      "sourceType": "com.trading.manualorderservice.config.AuthServiceConfig"
+    }
+  ],
+  "hints": []
+}

@@ -1,0 +1,4 @@
+com\trading\astropredictionsvc\AstropredictionsvcApplication.class
+com\trading\astropredictionsvc\controller\AstroController.class
+com\trading\astropredictionsvc\publisher\AstroSignalPublisher.class
+com\trading\astropredictionsvc\controller\TestController.class

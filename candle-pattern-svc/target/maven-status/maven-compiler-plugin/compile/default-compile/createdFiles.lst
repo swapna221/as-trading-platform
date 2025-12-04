@@ -1,0 +1,3 @@
+com\trading\candlepatternsvc\controller\TrendSignalController.class
+com\trading\candlepatternsvc\CandlepatternsvcApplication.class
+com\trading\candlepatternsvc\service\TrendSignalPublisher.class
