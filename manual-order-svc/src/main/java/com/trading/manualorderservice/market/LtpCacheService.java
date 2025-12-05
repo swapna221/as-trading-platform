@@ -13,32 +13,36 @@ public class LtpCacheService {
     private final Map<String, Double> ltpMap = new ConcurrentHashMap<>();
     private final Map<String, Long> timestampMap = new ConcurrentHashMap<>();
 
-    // LTP freshness timeout (8 seconds recommended)
-    private static final long FRESHNESS_MS = 8000;
+    // FIXED — must be > 20 seconds batch interval
+    private static final long FRESHNESS_MS = 30_000; // 30 sec
 
-    /** Save LTP into cache */
-    public void update(String securityId, double ltp) {
-        ltpMap.put(securityId, ltp);
-        timestampMap.put(securityId, System.currentTimeMillis());
+    private String key(String segment, String secId) {
+        return segment + "|" + secId;
     }
 
-    /** Return LTP only if fresh */
-    public Double getFresh(String securityId) {
-        Long ts = timestampMap.get(securityId);
+    public void update(String segment, String secId, double ltp) {
+        String k = key(segment, secId);
+        ltpMap.put(k, ltp);
+        timestampMap.put(k, System.currentTimeMillis());
+    }
+
+    public Double getFresh(String segment, String secId) {
+        String k = key(segment, secId);
+
+        Long ts = timestampMap.get(k);
         if (ts == null) return null;
 
         long age = System.currentTimeMillis() - ts;
         if (age > FRESHNESS_MS) return null;
 
-        return ltpMap.get(securityId);
+        return ltpMap.get(k);
     }
 
-    /** Always return latest cached value (even if stale) */
-    public Double getLastKnown(String securityId) {
-        return ltpMap.get(securityId);
+    public Double getLastKnown(String segment, String secId) {
+        return ltpMap.get(key(segment, secId));
     }
 
-    public boolean exists(String securityId) {
-        return ltpMap.containsKey(securityId);
+    public boolean exists(String segment, String secId) {
+        return ltpMap.containsKey(key(segment, secId));
     }
 }

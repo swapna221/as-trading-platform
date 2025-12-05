@@ -1,6 +1,7 @@
 package com.trading.manualorderservice.service;
 
 import com.trading.manualorderservice.dhan.DhanOrderClient;
+import com.trading.manualorderservice.dhan.ExchangeSegment;
 import com.trading.manualorderservice.entity.OrderEntity;
 import com.trading.manualorderservice.entity.OrderRole;
 import com.trading.manualorderservice.market.LtpCacheService;
@@ -60,7 +61,8 @@ public class TrailingSlEngine {
         if (slOrder == null) return;
 
         // 3️⃣ FETCH LTP FROM CACHE ONLY (NEVER CALL DHAN DIRECTLY)
-        Double ltp = ltpCacheService.getFresh(entry.getSecurityId());
+        Double ltp = ltpCacheService.getFresh(entry.getExchangeSegment(), entry.getSecurityId());
+
         if (ltp == null || ltp <= 0) {
             log.debug("⏭ No fresh LTP for secId={}, skipping trailing", entry.getSecurityId());
             return;
@@ -173,7 +175,7 @@ public class TrailingSlEngine {
     }
 
     private double resolveTickSize(OrderEntity entry) {
-        if ("NSE_EQ".equalsIgnoreCase(entry.getExchangeSegment())) {
+        if (ExchangeSegment.NSE_EQ.equalsIgnoreCase(entry.getExchangeSegment())) {
             return dhanStockHelper.getTickSize(entry.getSymbol()).orElse(0.05);
         }
         return 0.05;

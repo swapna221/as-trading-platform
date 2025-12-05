@@ -20,13 +20,12 @@ public class OcoEngine {
 
     /**
      * Runs every 2 seconds.
-     * Checks if SL or TARGET filled → cancel the other.
+     * Checks if SL or TARGET has filled → cancel the other leg.
      */
     @Scheduled(fixedDelay = 2000)
     public void runOcoMonitor() {
 
-        // All entries where SL or TGT might get filled
-        var entries = orderRepository.findActiveEntriesWithTrailing();
+        var entries = orderRepository.findEntriesForOco();
         if (entries.isEmpty()) return;
 
         for (OrderEntity entry : entries) {
@@ -42,34 +41,37 @@ public class OcoEngine {
 
         Long entryId = entry.getId();
 
-        // Fetch SL & TARGET status from DB (not from broker)
-        OrderEntity slFilled = orderRepository.findFilledSlOrder(entryId);
+        // DB checks (no broker calls)
+        OrderEntity slFilled  = orderRepository.findFilledSlOrder(entryId);
         OrderEntity tgtFilled = orderRepository.findFilledTargetOrder(entryId);
 
-        if (slFilled == null && tgtFilled == null) return; // nothing happened
+        // Nothing happened yet
+        if (slFilled == null && tgtFilled == null) return;
 
         BrokerUserDetails creds =
                 dhanCredentialService.getDhanCredentialsByUserId(entry.getUserId());
 
-        // Case 1️⃣ : SL filled → cancel TARGET
+        // SL HIT → cancel TARGET
         if (slFilled != null) {
+
             OrderEntity activeTarget = orderRepository.findActiveTargetOrder(entryId);
             if (activeTarget != null) {
-                tryCancelOther(activeTarget, creds, "SL HIT → Canceling TARGET");
+                cancelOtherLeg(activeTarget, creds, "SL HIT → Canceling TARGET");
             }
 
-            // Mark entry closed
             entry.setOrderStatus("COMPLETED");
             entry.setRemark("SL hit, target canceled");
             orderRepository.save(entry);
+
             return;
         }
 
-        // Case 2️⃣ : TARGET filled → cancel SL
+        // TARGET HIT → cancel SL
         if (tgtFilled != null) {
+
             OrderEntity activeSl = orderRepository.findActiveSlOrder(entryId);
             if (activeSl != null) {
-                tryCancelOther(activeSl, creds, "TARGET HIT → Canceling SL");
+                cancelOtherLeg(activeSl, creds, "TARGET HIT → Canceling SL");
             }
 
             entry.setOrderStatus("COMPLETED");
@@ -78,25 +80,29 @@ public class OcoEngine {
         }
     }
 
-    private void tryCancelOther(OrderEntity order, BrokerUserDetails creds, String reason) {
+    private void cancelOtherLeg(OrderEntity order,
+                                BrokerUserDetails creds,
+                                String reason) {
 
         try {
             var cancelRes = dhanOrderClient.cancelOrder(creds, order.getBrokerOrderId());
 
             String status = cancelRes.isOk() ? cancelRes.getStatus() : "CANCEL_FAILED";
+
             order.setOrderStatus(status);
             order.setRemark(reason + " → " + cancelRes.getRaw());
             orderRepository.save(order);
 
-            log.info("🟢 OCO: {} → Order {} canceled successfully",
-                    order.getRole(), order.getId());
+            log.info("🟢 OCO: {} → Order {} cancelled", order.getRole(), order.getId());
 
         } catch (Exception e) {
-            log.error("❌ Failed to cancel {} order {}: {}", order.getRole(), order.getId(), e.getMessage());
+
             order.setOrderStatus("CANCEL_FAILED");
             order.setRemark("OCO cancel failed: " + e.getMessage());
             orderRepository.save(order);
+
+            log.error("❌ OCO cancel error for {} order {}: {}",
+                    order.getRole(), order.getId(), e.getMessage());
         }
     }
 }
-

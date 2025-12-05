@@ -13,33 +13,43 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
     List<OrderEntity> findByParentOrderIdAndRole(Long parentId, OrderRole role);
 
     /**
-     * All active ENTRY orders that have trailing SL enabled.
+     * All entries where SL or TGT monitoring is needed (OCO).
+     * Not restricted by trailing mode.
      */
     @Query("""
        SELECT e FROM OrderEntity e
        WHERE e.role = com.trading.manualorderservice.entity.OrderRole.ENTRY
          AND e.workflow IN ('EQUITY_INTRADAY', 'OPTION')
-         AND e.trailingPercent IS NOT NULL
-         AND e.trailingPercent > 0
-         AND e.orderStatus IN ('FILLED', 'COMPLETED')
-       """)
+         AND e.orderStatus IN ('FILLED','OPEN','PENDING','TRIGGER_PENDING')
+    """)
+    List<OrderEntity> findEntriesForOco();
+
+    @Query("""
+   SELECT e FROM OrderEntity e
+   WHERE e.role = com.trading.manualorderservice.entity.OrderRole.ENTRY
+     AND e.workflow IN ('EQUITY_INTRADAY', 'OPTION')
+     AND e.trailingPercent IS NOT NULL
+     AND e.trailingPercent > 0
+     AND e.orderStatus IN ('FILLED', 'COMPLETED')
+   """)
     List<OrderEntity> findActiveEntriesWithTrailing();
 
 
+
     /**
-     * Currently active SL order for this entry.
+     * Find active SL order for an entry.
      */
     @Query("""
            SELECT o FROM OrderEntity o
            WHERE o.role = com.trading.manualorderservice.entity.OrderRole.STOPLOSS
              AND o.parentOrderId = :entryId
-             AND o.orderStatus IN ('OPEN', 'PENDING', 'TRIGGER_PENDING', 'RECEIVED')
+             AND o.orderStatus IN ('OPEN','PENDING','TRIGGER_PENDING','RECEIVED')
            """)
     OrderEntity findActiveSlOrder(@Param("entryId") Long entryId);
 
 
     /**
-     * Currently active TARGET order for this entry.
+     * Find active TARGET order.
      */
     @Query("""
        SELECT o FROM OrderEntity o
@@ -51,7 +61,7 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
 
 
     /**
-     * Check if SL has been filled.
+     * Check if SL is filled.
      */
     @Query("""
        SELECT o FROM OrderEntity o
@@ -63,7 +73,7 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
 
 
     /**
-     * Check if TARGET has been filled.
+     * Check if TARGET is filled.
      */
     @Query("""
        SELECT o FROM OrderEntity o
@@ -73,18 +83,17 @@ public interface OrderRepository extends JpaRepository<OrderEntity, Long> {
        """)
     OrderEntity findFilledTargetOrder(@Param("entryId") Long entryId);
 
+
     @Query("""
     SELECT o FROM OrderEntity o
-    WHERE o.orderStatus IN ('TRANSIT')
+    WHERE o.orderStatus = 'TRANSIT'
     """)
     List<OrderEntity> findOrdersInTransit();
+
 
     @Query("""
     SELECT o FROM OrderEntity o
     WHERE o.orderStatus IN ('FILLED','OPEN','PENDING','TRIGGER_PENDING')
-""")
+    """)
     List<OrderEntity> findOrdersForLtpRefresh();
-
-
-
 }

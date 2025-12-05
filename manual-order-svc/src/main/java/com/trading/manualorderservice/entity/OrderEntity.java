@@ -26,7 +26,7 @@ public class OrderEntity {
     private String tradingSymbol;     // e.g. SBIN-Dec2025-950-CE for options
     private String securityId;        // Dhan security ID
 
-    private String exchangeSegment;   // NSE_EQ / NSE_FNO
+    private String exchangeSegment;   // NSE_EQ / NSE_FNO / NSE_IDX
     private String transactionType;   // BUY/SELL
     private Integer quantity;
 

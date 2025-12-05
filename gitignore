@@ -2,7 +2,7 @@
 target/
 **/target/
 
-# IntelliJ IDEA
+# IntelliJ IDEA 
 .idea/
 *.iml
 *.iws
@@ -21,3 +21,5 @@ target/
 # OS files
 .DS_Store
 Thumbs.db
+.idea/vcs.xml
+
