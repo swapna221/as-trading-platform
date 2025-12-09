@@ -1,0 +1,32 @@
+{
+  "groups": [
+    {
+      "name": "auth-service",
+      "type": "com.trading.manualorderservice.config.AuthServiceConfig",
+      "sourceType": "com.trading.manualorderservice.config.AuthServiceConfig"
+    },
+    {
+      "name": "dhan",
+      "type": "com.trading.manualorderservice.config.DhanAuthConfig",
+      "sourceType": "com.trading.manualorderservice.config.DhanAuthConfig"
+    }
+  ],
+  "properties": [
+    {
+      "name": "auth-service.url",
+      "type": "java.lang.String",
+      "sourceType": "com.trading.manualorderservice.config.AuthServiceConfig"
+    },
+    {
+      "name": "dhan.base-url",
+      "type": "java.lang.String",
+      "sourceType": "com.trading.manualorderservice.config.DhanAuthConfig"
+    },
+    {
+      "name": "dhan.default-user-id",
+      "type": "java.lang.Long",
+      "sourceType": "com.trading.manualorderservice.config.DhanAuthConfig"
+    }
+  ],
+  "hints": []
+}

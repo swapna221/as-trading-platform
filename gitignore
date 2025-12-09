@@ -22,5 +22,5 @@ target/
 .DS_Store
 Thumbs.db
 .idea/vcs.xml
- manual-order-svc/target/
+manual-order-svc/target/
 
