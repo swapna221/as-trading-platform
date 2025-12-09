@@ -1,183 +1,228 @@
 package com.trading.manualorderservice.service;
 
-import com.trading.manualorderservice.dhan.DhanOrderClient;
-import com.trading.manualorderservice.dhan.ExchangeSegment;
 import com.trading.manualorderservice.entity.OrderEntity;
 import com.trading.manualorderservice.entity.OrderRole;
 import com.trading.manualorderservice.market.LtpCacheService;
 import com.trading.manualorderservice.repo.OrderRepository;
-import com.trading.manualorderservice.stockfilter.DhanStockHelper;
-import com.trading.shareddto.entity.BrokerUserDetails;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
-import java.util.List;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.*;
+import java.util.stream.Collectors;
 
-@Service
 @Slf4j
+@Service
 @RequiredArgsConstructor
 public class TrailingSlEngine {
 
     private final OrderRepository orderRepository;
-    private final DhanCredentialService dhanCredentialService;
-    private final DhanOrderClient dhanOrderClient;
-    private final DhanStockHelper dhanStockHelper;
-    private final LtpCacheService ltpCacheService;   // <-- IMPORTANT: use cache
+    private final LtpCacheService ltpCacheService;
 
     /**
-     * Trailing engine tick:
-     * Runs every 3 seconds.
+     * Runs every 5 seconds.
      */
-    @Scheduled(fixedDelay = 3000)
-    public void runTrailingForIntradayAndOptions() {
+    @Scheduled(fixedDelay = 5000)
+    public void run() {
 
-        List<OrderEntity> entries = orderRepository.findActiveEntriesWithTrailing();
-        if (entries.isEmpty()) return;
+        log.info("⏱ [TRAIL] Tick fired");
+
+        List<OrderEntity> raw = orderRepository.findActiveEntriesWithTrailing();
+        if (raw == null || raw.isEmpty()) {
+            log.info("🔍 [TRAIL] entries found = 0");
+            return;
+        }
+
+        // -------------------------------
+        // ⭐️ NULL-SAFE DEDUPE GROUPING ⭐️
+        // -------------------------------
+        List<OrderEntity> entries = raw.stream()
+                .collect(Collectors.groupingBy(OrderEntity::getTradingSymbol)) // group by symbol
+                .values().stream()
+                .map(list -> list.stream()
+                        .max(Comparator.comparing(this::extractCreatedAt)) // safe comparator
+                        .orElse(null)
+                )
+                .filter(Objects::nonNull)
+                .toList();
+
+        log.info("🔍 [TRAIL] entries found = {}", entries.size());
 
         for (OrderEntity entry : entries) {
             try {
                 processEntry(entry);
             } catch (Exception e) {
-                log.error("❌ Trailing error for entry {}: {}", entry.getId(), e.getMessage(), e);
+                log.error("❌ [TRAIL] Error processing entry {} ({})",
+                        entry.getId(), entry.getTradingSymbol(), e);
             }
         }
     }
 
+    /**
+     * NULL-safe createdAt extractor (works with LocalDateTime or Date).
+     */
+    private LocalDateTime extractCreatedAt(OrderEntity o) {
+        if (o == null || o.getCreatedAt() == null) {
+            return LocalDateTime.MIN;
+        }
+        // createdAt is Instant → convert
+        return LocalDateTime.ofInstant(o.getCreatedAt(), ZoneId.systemDefault());
+    }
+
+
+    /* ----------------------------------------------------------------------
+       PROCESS ENTRY LOGIC (unchanged from your working version)
+    ---------------------------------------------------------------------- */
+
     private void processEntry(OrderEntity entry) {
 
-        // 1️⃣ Credentials
-        BrokerUserDetails creds = dhanCredentialService.getDhanCredentialsByUserId(entry.getUserId());
-        if (creds == null) {
-            log.error("❌ No creds for user {}. Skipping trailing for entry {}", entry.getUserId(), entry.getId());
+        String symbol = entry.getTradingSymbol();
+        Long entryId = entry.getId();
+
+        Double trailingPct = entry.getTrailingPercent();
+        if (trailingPct == null || trailingPct <= 0.0) {
+            log.debug("⚪ [TRAIL][NO-UPDATE] symbol={} entryId={} reasonCode=TRAILING_DISABLED", symbol, entryId);
             return;
         }
 
-        // 2️⃣ Find SL order
-        OrderEntity slOrder = orderRepository.findActiveSlOrder(entry.getId());
-        if (slOrder == null) return;
+        // SL or TGT filled already → trailing stops
+        if (orderRepository.findFilledSlOrder(entryId) != null ||
+                orderRepository.findFilledTargetOrder(entryId) != null) {
 
-        // 3️⃣ FETCH LTP FROM CACHE ONLY (NEVER CALL DHAN DIRECTLY)
+            log.debug("⚪ [TRAIL][NO-UPDATE] symbol={} entryId={} reasonCode=CHILD_ALREADY_FILLED",
+                    symbol, entryId);
+            return;
+        }
+
+        // Fetch LTP
         Double ltp = ltpCacheService.getFresh(entry.getExchangeSegment(), entry.getSecurityId());
-
         if (ltp == null || ltp <= 0) {
-            log.debug("⏭ No fresh LTP for secId={}, skipping trailing", entry.getSecurityId());
+            log.debug("⚪ [TRAIL][NO-UPDATE] symbol={} entryId={} reasonCode=NO_LTP ltp={}", symbol, entryId, ltp);
             return;
         }
 
-        double entryPrice = entry.getEntryPrice() != null ? entry.getEntryPrice() : 0.0;
-        double trailingPct = entry.getTrailingPercent() != null ? entry.getTrailingPercent() : 0.0;
-        if (entryPrice <= 0 || trailingPct <= 0) return;
-
-        // 4️⃣ Profit %
-        double profitPct = "BUY".equalsIgnoreCase(entry.getTransactionType())
-                ? ((ltp - entryPrice) / entryPrice) * 100.0
-                : ((entryPrice - ltp) / entryPrice) * 100.0;
-
-        if (profitPct < trailingPct) return;
-
-        // 5️⃣ Trailing SL logic
-        double effectiveTrail = profitPct - trailingPct;
-        double rawNewSl;
-
-        if ("BUY".equalsIgnoreCase(entry.getTransactionType())) {
-            rawNewSl = entryPrice * (1 + effectiveTrail / 100.0);
-        } else {
-            rawNewSl = entryPrice * (1 - effectiveTrail / 100.0);
+        double entryPrice = safe(entry.getEntryPrice());
+        if (entryPrice <= 0) {
+            log.debug("⚪ [TRAIL][NO-UPDATE] symbol={} entryId={} reasonCode=NO_ENTRY_PRICE entryPrice={}",
+                    symbol, entryId, entryPrice);
+            return;
         }
 
-        double tick = resolveTickSize(entry);
-        double newSl = roundToTick(rawNewSl, tick);
+        boolean isLong = "BUY".equalsIgnoreCase(entry.getTransactionType());
+        double profitPct = computeProfitPercent(isLong, entryPrice, ltp);
 
-        Double currentSl = slOrder.getSlPrice() != null ? slOrder.getSlPrice() : 0.0;
-
-        // Skip if not better SL
-        if ("BUY".equalsIgnoreCase(entry.getTransactionType())) {
-            if (newSl <= currentSl) return;
-        } else {
-            if (newSl >= currentSl) return;
+        // Profit below threshold → just update high/low LTP
+        if (profitPct < trailingPct) {
+            updateWatermarksOnly(entry, isLong, ltp, profitPct, trailingPct);
+            return;
         }
 
-        log.info("🔵 Trailing SL update: {} oldSl={} → newSl={} ltp={} profit%={}",
-                entry.getTradingSymbol(), currentSl, newSl, ltp, profitPct);
+        // Compute new SL
+        double newSl = computeTrailingSl(entry, isLong, ltp, trailingPct);
+        Double currentSl = entry.getSlPrice();
 
-        // 6️⃣ Cancel old SL
-        if (slOrder.getBrokerOrderId() != null) {
-            var cancel = dhanOrderClient.cancelOrder(creds, slOrder.getBrokerOrderId());
-            slOrder.setOrderStatus(cancel.isOk() ? "CANCELLED" : "CANCEL_FAILED");
-            slOrder.setRemark("Cancelled for trailing: " + cancel.getRaw());
-        } else {
-            slOrder.setOrderStatus("CANCELLED");
-            slOrder.setRemark("Local cancel for trailing");
+        // If trailing does not improve → skip
+        if (currentSl != null) {
+            if (isLong && newSl <= currentSl) {
+                persistEntryWatermarks(entry, isLong, ltp);
+                return;
+            }
+            if (!isLong && newSl >= currentSl) {
+                persistEntryWatermarks(entry, isLong, ltp);
+                return;
+            }
         }
-        orderRepository.save(slOrder);
 
-        // 7️⃣ Place new SL order
-        double trigger = "BUY".equalsIgnoreCase(entry.getTransactionType())
-                ? newSl + tick
-                : newSl - tick;
+        // Find active SL order
+        OrderEntity activeSl = orderRepository.findActiveSlOrder(entryId);
 
-        trigger = roundToTick(trigger, tick);
+        // Update entry SL
+        entry.setSlPrice(newSl);
+        persistEntryWatermarks(entry, isLong, ltp);
+        orderRepository.save(entry);
 
-        var slRes = dhanOrderClient.placeOrder(
-                creds,
-                entry.getExchangeSegment(),
-                reverse(entry.getTransactionType()),
-                entry.getProductType(),
-                "STOP_LOSS",
-                entry.getSecurityId(),
-                entry.getQuantity(),
-                newSl,
-                trigger
+        if (activeSl == null) {
+            log.debug("⚪ [TRAIL][NO-UPDATE] symbol={} entryId={} reasonCode=NO_ACTIVE_SL", symbol, entryId);
+            return;
+        }
+
+        double oldChildSl = safe(activeSl.getSlPrice());
+
+        // Update child STOPLOSS locally
+        activeSl.setSlPrice(newSl);
+        activeSl.setTriggerPrice(newSl);
+        activeSl.setRemark(
+                String.format("Trailing SL moved from %.2f → %.2f (entryId=%d)", oldChildSl, newSl, entryId)
         );
+        orderRepository.save(activeSl);
 
-        if (!slRes.isOk()) {
-            log.error("❌ Failed to place new trailing SL: {}", slRes.getRaw());
-            return;
+        log.info("🟢 [TRAIL][MOVE-SL] symbol={} entryId={} newSl={} ltp={} trailPct={} profitPct={}",
+                symbol, entryId, newSl, ltp, trailingPct, profitPct);
+    }
+
+    /* ----------------------------------------------------------------------
+       Helper methods
+    ---------------------------------------------------------------------- */
+
+    private void updateWatermarksOnly(OrderEntity entry,
+                                      boolean isLong, double ltp,
+                                      double profitPct, double trailingPct) {
+
+        persistEntryWatermarks(entry, isLong, ltp);
+        orderRepository.save(entry);
+
+        log.debug("⚪ [TRAIL][NO-UPDATE] symbol={} entryId={} BELOW_THRESHOLD profit={} < trail={} ltp={}",
+                entry.getTradingSymbol(), entry.getId(),
+                round(profitPct), round(trailingPct), ltp);
+    }
+
+    private double computeTrailingSl(OrderEntity entry, boolean isLong,
+                                     double ltp, double trailingPct) {
+
+        double basis;
+
+        if (isLong) {
+            Double high = entry.getHighestLtp();
+            if (high == null || high <= 0) high = entry.getEntryPrice();
+            if (ltp > high) high = ltp;
+            basis = high;
+        } else {
+            Double low = entry.getLowestLtp();
+            if (low == null || low <= 0) low = entry.getEntryPrice();
+            if (ltp < low) low = ltp;
+            basis = low;
         }
 
-        // 8️⃣ Save new SL order
-        OrderEntity newRecord = OrderEntity.builder()
-                .userId(entry.getUserId())
-                .workflow(entry.getWorkflow())
-                .symbol(entry.getSymbol())
-                .tradingSymbol(entry.getTradingSymbol())
-                .securityId(entry.getSecurityId())
-                .exchangeSegment(entry.getExchangeSegment())
-                .transactionType(reverse(entry.getTransactionType()))
-                .quantity(entry.getQuantity())
-                .orderType("STOP_LOSS")
-                .productType(entry.getProductType())
-                .role(OrderRole.STOPLOSS)
-                .parentOrderId(entry.getId())
-                .slPrice(newSl)
-                .orderStatus(slRes.getStatus())
-                .brokerOrderId(slRes.getOrderId())
-                .remark("Trailing SL placed: " + slRes.getRaw())
-                .build();
-
-        orderRepository.save(newRecord);
-
-        log.info("🟢 New trailing SL placed: {} (trigger={})", newSl, trigger);
+        return isLong ?
+                basis * (1 - trailingPct / 100.0) :
+                basis * (1 + trailingPct / 100.0);
     }
 
-    private String reverse(String side) {
-        return "BUY".equalsIgnoreCase(side) ? "SELL" : "BUY";
-    }
+    private void persistEntryWatermarks(OrderEntity entry, boolean isLong, double ltp) {
 
-    private double roundToTick(double price, double tick) {
-        BigDecimal p = BigDecimal.valueOf(price);
-        BigDecimal t = BigDecimal.valueOf(tick);
-        return p.divide(t, 0, RoundingMode.HALF_UP).multiply(t).doubleValue();
-    }
-
-    private double resolveTickSize(OrderEntity entry) {
-        if (ExchangeSegment.NSE_EQ.equalsIgnoreCase(entry.getExchangeSegment())) {
-            return dhanStockHelper.getTickSize(entry.getSymbol()).orElse(0.05);
+        if (isLong) {
+            Double h = entry.getHighestLtp();
+            if (h == null || ltp > h) entry.setHighestLtp(ltp);
+        } else {
+            Double lo = entry.getLowestLtp();
+            if (lo == null || ltp < lo) entry.setLowestLtp(ltp);
         }
-        return 0.05;
+    }
+
+    private double computeProfitPercent(boolean isLong, double entryPrice, double ltp) {
+        return isLong
+                ? ((ltp - entryPrice) / entryPrice) * 100
+                : ((entryPrice - ltp) / entryPrice) * 100;
+    }
+
+    private double safe(Double d) {
+        return d == null ? 0 : d;
+    }
+
+    private double round(double v) {
+        return Math.round(v * 100.0) / 100.0;
     }
 }

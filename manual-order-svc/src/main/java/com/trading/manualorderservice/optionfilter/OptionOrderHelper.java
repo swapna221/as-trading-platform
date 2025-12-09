@@ -4,6 +4,7 @@ import com.trading.manualorderservice.market.LtpServiceHolder;
 import com.trading.manualorderservice.marketfeed.IndexPollingService;
 import com.trading.manualorderservice.service.DhanAllApis;
 import com.trading.manualorderservice.stockfilter.DhanStockHelper;
+import com.trading.manualorderservice.util.BlackScholesUtil;
 import com.trading.shareddto.entity.BrokerUserDetails;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -269,4 +270,30 @@ public class OptionOrderHelper {
 	public Optional<String> getUnderlyingSpotSecurityId(String u) {
 		return Optional.ofNullable(spotSecurityIds.get(u.toUpperCase()));
 	}
+
+	public double computeIvForOption(
+			OptionRow row,
+			double spotPrice,
+			double optionLtp
+	) {
+		boolean isCall = row.optionType.equalsIgnoreCase("CE");
+		double strike = row.strike;
+
+		long days = java.time.temporal.ChronoUnit.DAYS.between(
+				LocalDate.now(), row.expiry);
+		double T = Math.max(days / 365.0, 1.0 / 365.0); // maturity in years
+
+		return BlackScholesUtil.computeIV(isCall, spotPrice, strike, optionLtp, T);
+	}
+
+	public List<OptionRow> getOptions(String underlying) {
+		return optionsByUnderlying.getOrDefault(underlying.toUpperCase(), List.of());
+	}
+
+	public static DateTimeFormatter getMonthFormatter() {
+		return MONTH_FMT;
+	}
+
+
+
 }

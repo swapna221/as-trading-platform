@@ -1,12 +1,18 @@
 package com.trading.manualorderservice.dhan;
 
+import com.trading.manualorderservice.dto.DhanOrderBookResponse;
 import com.trading.shareddto.entity.BrokerUserDetails;
 import lombok.Builder;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 @Slf4j
 @Component
@@ -208,5 +214,104 @@ public class DhanOrderClient {
                 .raw("Max retries reached while cancelling order")
                 .build();
     }
+
+
+
+
+    public List<DhanOrderBookResponse> fetchOrderBook(BrokerUserDetails creds) {
+
+        String url = BASE_URL + "/v2/orders";
+        int attempts = 0;
+
+        while (attempts < MAX_RETRIES) {
+            attempts++;
+            try {
+                Request request = new Request.Builder()
+                        .url(url)
+                        .get()
+                        .addHeader("access-token", creds.getAccessToken())
+                        .addHeader("X-Api-Key", creds.getClientId())
+                        .addHeader("Content-Type", "application/json")
+                        .build();
+
+                try (Response response = client.newCall(request).execute()) {
+
+                    String body = response.body() != null ? response.body().string() : "";
+                    log.info("Dhan fetchOrderBook attempt {}: code={} body={}",
+                            attempts, response.code(), body);
+
+                    if (!response.isSuccessful()) {
+
+                        // 4xx → return immediately
+                        if (response.code() >= 400 && response.code() < 500) {
+                            log.error("❌ fetchOrderBook client error {}: {}", response.code(), body);
+                            return Collections.emptyList();
+                        }
+
+                        // 5xx → retry
+                        continue;
+                    }
+
+                    // Parse JSON Array → List<DhanOrderBookResponse>
+                    JSONArray arr = new JSONArray(body);
+                    List<DhanOrderBookResponse> list = new ArrayList<>();
+
+                    for (int i = 0; i < arr.length(); i++) {
+                        JSONObject json = arr.getJSONObject(i);
+                        DhanOrderBookResponse dto = new DhanOrderBookResponse();
+
+                        dto.setOrderId(json.optString("orderId"));
+                        dto.setDhanClientId(json.optString("dhanClientId"));
+                        dto.setCorrelationId(json.optString("correlationId"));
+                        dto.setOrderStatus(json.optString("orderStatus"));
+                        dto.setTransactionType(json.optString("transactionType"));
+                        dto.setExchangeSegment(json.optString("exchangeSegment"));
+                        dto.setProductType(json.optString("productType"));
+                        dto.setOrderType(json.optString("orderType"));
+                        dto.setValidity(json.optString("validity"));
+                        dto.setTradingSymbol(json.optString("tradingSymbol"));
+                        dto.setSecurityId(json.optString("securityId"));
+                        dto.setQuantity(json.optInt("quantity"));
+                        dto.setDisclosedQuantity(json.optInt("disclosedQuantity"));
+                        dto.setPrice(json.optDouble("price"));
+                        dto.setTriggerPrice(json.optDouble("triggerPrice"));
+                        dto.setAfterMarketOrder(json.optBoolean("afterMarketOrder"));
+                        dto.setBoProfitValue(json.optDouble("boProfitValue"));
+                        dto.setBoStopLossValue(json.optDouble("boStopLossValue"));
+                        dto.setLegName(json.optString("legName"));
+                        dto.setCreateTime(json.optString("createTime"));
+                        dto.setUpdateTime(json.optString("updateTime"));
+                        dto.setExchangeTime(json.optString("exchangeTime"));
+                        dto.setDrvExpiryDate(json.optString("drvExpiryDate"));
+                        dto.setDrvOptionType(json.optString("drvOptionType"));
+                        dto.setDrvStrikePrice(json.optDouble("drvStrikePrice"));
+                        dto.setOmsErrorCode(json.optString("omsErrorCode"));
+                        dto.setOmsErrorDescription(json.optString("omsErrorDescription"));
+                        dto.setRemainingQuantity(json.optInt("remainingQuantity"));
+                        dto.setFilledQty(json.optInt("filledQty"));
+                        dto.setAverageTradedPrice(json.optDouble("averageTradedPrice"));
+
+                        list.add(dto);
+                    }
+
+                    return list;
+                }
+
+            } catch (Exception e) {
+                log.error("Error calling fetchOrderBook (attempt {}): {}", attempts, e.getMessage());
+            }
+
+            try {
+                Thread.sleep(RETRY_DELAY_MS);
+            } catch (InterruptedException ignored) {}
+        }
+
+        return Collections.emptyList();
+    }
+
+
+
+
+
 
 }

@@ -56,6 +56,14 @@ public class OrderEntity {
     @Column(columnDefinition = "TEXT")
     private String remark;
 
+    // For trailing SL swing tracking
+    @Column(name = "highest_ltp")
+    private Double highestLtp;
+
+    @Column(name = "lowest_ltp")
+    private Double lowestLtp;
+
+
 
     private Instant createdAt = Instant.now();
     private Instant updatedAt = Instant.now();

@@ -91,3 +91,7 @@ dhan:
 instrument:
   csv-url: https://images.dhan.co/api-data/api-scrip-master.csv
   reload-cron: "0 5 8 * * MON-FRI"   # refresh each trading day at 8:05 AM
+
+logging:
+  level:
+    com.trading.manualorderservice.service.TrailingSlEngine: DEBUG

@@ -1,7 +1,10 @@
 package com.trading.manualorderservice.service;
 
+import com.trading.manualorderservice.client.DhanApiHttpClient;
+import com.trading.manualorderservice.config.DhanAuthConfig;
 import com.trading.manualorderservice.limits.ThrottledHttpClient;
 import com.trading.shareddto.entity.BrokerUserDetails;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.json.JSONArray;
@@ -9,6 +12,7 @@ import org.json.JSONObject;
 import org.springframework.stereotype.Component;
 import com.trading.manualorderservice.marketfeed.IndexLtpCache;
 
+import java.net.http.HttpResponse;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -19,6 +23,15 @@ import java.util.Map;
 public class DhanAllApis {
 
     private final IndexLtpCache indexCache;
+    private final DhanApiHttpClient httpClient;   // ✅ ADD THIS
+    private final DhanAuthConfig authConfig;      // ✅ ADD THIS
+
+    private String baseUrl;                       // ✅ ADD THIS
+
+    @PostConstruct
+    public void init() {
+        this.baseUrl = authConfig.getBaseUrl();   // load from YAML
+    }
 
     private static final String LTP_URL = "https://api.dhan.co/v2/marketfeed/ltp";
 
@@ -190,6 +203,24 @@ public class DhanAllApis {
 
         return out;
     }
+
+    public double fetchIv(String securityId, BrokerUserDetails creds) throws Exception {
+
+        String url = baseUrl + "/v2/marketfeed/option/details/" + securityId;
+
+        HttpResponse<String> resp = httpClient.get(url, creds);
+
+        JSONObject json = new JSONObject(resp.body());
+        JSONObject data = json.getJSONObject("data");
+
+        if (!data.has("iv")) {
+            throw new RuntimeException("IV not available for: " + securityId);
+        }
+
+        return data.getDouble("iv");
+    }
+
+
 
 
 }
